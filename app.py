@@ -17,19 +17,28 @@ DB_PATH = "fiesta_galeria.db"
 LOGO_PATH = "logo_hilda.jpg"
 
 
-# --- Inicialización de Base de Datos (con BLOB para SQLite en la nube) ---
+# --- Inicialización y Migración Segura de la Base de Datos ---
 def init_db():
   conn = sqlite3.connect(DB_PATH)
   cursor = conn.cursor()
-  cursor.execute("""
-        CREATE TABLE IF NOT EXISTS media (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT NOT NULL,
-            file_data BLOB NOT NULL,
-            file_type TEXT NOT NULL,
-            upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+  # Verificar si la tabla existe y qué columnas tiene
+  cursor.execute(
+      "PRAGMA table_info(media);"
+  )
+  columns = [info[1] for info in cursor.fetchall()]
+
+  # Si la tabla no existe o le falta la columna file_data (es de la versión vieja), la recreamos
+  if not columns or "file_data" not in columns:
+    cursor.execute("DROP TABLE IF EXISTS media")
+    cursor.execute("""
+            CREATE TABLE media (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                file_data BLOB NOT NULL,
+                file_type TEXT NOT NULL,
+                upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
   conn.commit()
   conn.close()
 
@@ -165,7 +174,7 @@ else:
 
   st.markdown("---")
 
-  # Mostrar en Mosaico (3 columnas para dar espacio cómodo a los botones de edición)
+  # Mostrar en Mosaico (3 columnas)
   cols_per_row = 3
   rows = [
       media_records[i : i + cols_per_row]
