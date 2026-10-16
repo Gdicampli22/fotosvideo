@@ -5,6 +5,7 @@ import time
 import sqlite3
 from datetime import datetime
 import streamlit as st
+import streamlit.components.v1 as components
 from supabase import create_client, Client
 
 # ==========================================
@@ -18,7 +19,7 @@ POSICION_MARQUESINA_MENSAJES = "25px"
 ANCHO_BARRAS = "94vw"
 TAMAÑO_FUENTE_MENSAJES = "58px"  
 TAMAÑO_FUENTE_INSTRUCCIONES = "32px" 
-VELOCIDAD_MENSAJES = "45s"  # ANTES 35s - Ahora la marquesina va más despacio y suave
+VELOCIDAD_MENSAJES = "45s"  
 VELOCIDAD_INSTRUCCIONES = "25s" 
 TIEMPO_CAMBIO_FOTOS = 10 
 
@@ -69,7 +70,7 @@ def obtener_parametro_modo_fiesta():
         return False
 
 # ==========================================
-# LÓGICA DE FOTOS EN LA NUBE (ALTO RENDIMIENTO)
+# LÓGICA DE FOTOS EN LA NUBE
 # ==========================================
 @st.cache_data(ttl=60)
 def obtener_nombres_fotos_supabase():
@@ -78,7 +79,7 @@ def obtener_nombres_fotos_supabase():
         nombres = [f["name"] for f in archivos if f["name"].lower().endswith((".png", ".jpg", ".jpeg"))]
         return nombres
     except Exception as e:
-        print(f"Error cargando nombres de Supabase: {e}")
+        print(f"Error cargando nombres: {e}")
         return []
 
 @st.cache_data(ttl=600)
@@ -90,11 +91,10 @@ def obtener_foto_base64_desde_nube(nombre_foto):
         tipo_mime = "image/png" if extension == "png" else "image/jpeg"
         return f"data:{tipo_mime};base64,{b64_encoded}"
     except Exception as e:
-        print(f"Error convirtiendo foto {nombre_foto}: {e}")
         return None
 
 # ==========================================
-# LÓGICA INTELIGENTE DE TIEMPOS (Mensajes)
+# LÓGICA DE MENSAJES
 # ==========================================
 def obtener_mensajes_marquesina():
     try:
@@ -105,33 +105,28 @@ def obtener_mensajes_marquesina():
             return "<span class='marquesina-titulo'>✨ ESPERANDO NUEVOS MENSAJES ✨</span>"
 
         ahora = datetime.now()
-        ultimo_mensaje = todos[-1]
-        fecha_str_ultimo = ultimo_mensaje["fecha"].replace("T", " ")[:19]
-        fecha_ultimo_msj = datetime.strptime(fecha_str_ultimo, "%Y-%m-%d %H:%M:%S")
-
-        minutos_inactividad = (ahora - fecha_ultimo_msj).total_seconds() / 60.0
-        resultados_a_mostrar = []
+        resultados_recientes = []
         
-        if minutos_inactividad > 20:
-            resultados_a_mostrar = [(row["nombre"], row["mensaje"]) for row in todos]
-        else:
-            for row in todos:
-                try:
-                    f_str = row["fecha"].replace("T", " ")[:19]
-                    f_msj = datetime.strptime(f_str, "%Y-%m-%d %H:%M:%S")
-                    if (ahora - f_msj).total_seconds() / 60.0 <= 10:
-                        resultados_a_mostrar.append((row["nombre"], row["mensaje"]))
-                except Exception:
-                    pass 
+        for row in todos:
+            try:
+                f_str = row["fecha"].replace("T", " ")[:19]
+                f_msj = datetime.strptime(f_str, "%Y-%m-%d %H:%M:%S")
+                if (ahora - f_msj).total_seconds() / 60.0 <= 10:
+                    resultados_recientes.append((row["nombre"], row["mensaje"]))
+            except Exception:
+                pass 
 
-        if not resultados_a_mostrar:
-            return "<span class='marquesina-titulo'>✨ ESPERANDO NUEVOS MENSAJES ✨</span>"
+        if resultados_recientes:
+            resultados_a_mostrar = resultados_recientes
+        else:
+            resultados_a_mostrar = [(row["nombre"], row["mensaje"]) for row in todos]
 
         textos = []
         for nombre, msj in resultados_a_mostrar:
             textos.append(f"<span class='marquesina-titulo'>🥂 {nombre}:</span> {msj}")
             
         if len(resultados_a_mostrar) < 4:
+            textos.extend(textos)
             textos.extend(textos)
             
         return " &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;⭐&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ".join(textos)
@@ -143,7 +138,7 @@ activar_video_fiesta = obtener_parametro_modo_fiesta()
 texto_dinamico_mensajes = obtener_mensajes_marquesina()
 
 # ==========================================
-# INYECCIÓN DE AUDIO, VIDEO Y ESTILOS CSS
+# AUDIO, VIDEO Y ESTILOS CSS PRINCIPALES
 # ==========================================
 video_fondo_b64 = ""
 video_path = "Fondodefiesta.mp4"
@@ -161,14 +156,6 @@ if os.path.exists(audio_path):
     except Exception:
         pass
 
-html_audio = ""
-if audio_fondo_b64:
-    html_audio = f"""
-    <audio autoplay loop style="display:none;">
-        <source src="data:audio/mp3;base64,{audio_fondo_b64}" type="audio/mp3">
-    </audio>
-    """
-
 st.markdown(
     f"""
     <style>
@@ -180,15 +167,9 @@ st.markdown(
         
         [data-testid="stAppViewContainer"], 
         [data-testid="stAppViewBlockContainer"], 
-        .stApp {{
-            opacity: 1 !important;
-            transition: none !important;
-        }}
+        .stApp {{ opacity: 1 !important; transition: none !important; }}
         
-        [data-testid="stStatusWidget"] {{
-            visibility: hidden !important;
-            display: none !important;
-        }}
+        [data-testid="stStatusWidget"] {{ visibility: hidden !important; display: none !important; }}
         
         .block-container {{ padding-top: 0.1rem; padding-bottom: 0rem; padding-left: 0.5rem; padding-right: 0.5rem; max-width: 100%; }}
         .stApp {{ background: transparent !important; }}
@@ -251,18 +232,15 @@ st.markdown(
         @keyframes deslizarInstrucciones {{ 0% {{ transform: translate(0, 0); }} 100% {{ transform: translate(-100%, 0); }} }}
         
         .instrucciones-destaque {{
-            color: #d4af37; font-weight: bold; font-family: 'Helvetica Neue', sans-serif;
-            font-style: normal; letter-spacing: 1px; font-size: 26px; 
+            color: #d4af37; font-weight: bold; font-family: 'Helvetica Neue', sans-serif; font-style: normal; letter-spacing: 1px; font-size: 26px; 
         }}
-
     </style>
 
     <video autoplay muted loop playsinline class="video-fondo-html">
         <source src="data:video/mp4;base64,{video_fondo_b64}" type="video/mp4">
     </video>
     <div class="overlay-oscuro"></div>
-    {html_audio}
-""",
+    """,
     unsafe_allow_html=True,
 )
 
@@ -273,8 +251,6 @@ st.markdown(
 if activar_video_fiesta:
     if os.path.exists(video_path):
         st.video(video_path, format="video/mp4", autoplay=True, loop=True, muted=True)
-    else:
-        st.error(f"No se encontró el archivo de video '{video_path}'.")
 else:
     st.markdown(
         f"""
@@ -309,9 +285,7 @@ else:
         if foto_actual_b64:
             st.markdown(
                 f"""
-                <!-- PRECARGA INVISIBLE DE LA SIGUIENTE FOTO -->
                 <img src="{foto_siguiente_b64}" style="display:none;" />
-                
                 <div class="{st.session_state.efecto_actual}">
                     <div class="contenedor-foto-central">
                         <img src="{foto_actual_b64}" class="foto-proyector" />
@@ -342,6 +316,81 @@ else:
         """,
         unsafe_allow_html=True,
     )
+
+# ==========================================
+# BOTÓN DE AUDIO Y CLIC GLOBAL
+# ==========================================
+if audio_fondo_b64:
+    st.markdown("""
+    <style>
+        /* Botón más chiquito y a un costado */
+        iframe[title="streamlit_components.v1.html"] {
+            position: fixed !important;
+            bottom: 150px !important; 
+            right: 15px !important;
+            width: 50px !important;
+            height: 50px !important;
+            z-index: 99999 !important;
+            border: none !important;
+            background: transparent !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    html_boton_audio = f"""
+    <div style="display: flex; justify-content: center; align-items: center; height: 100%;">
+        <button id="btn-audio" onclick="toggleAudio()" style="background: rgba(20,20,20,0.6); border: 1px solid #d4af37; border-radius: 50%; width: 40px; height: 40px; font-size: 20px; cursor: pointer; color: white; display:flex; justify-content:center; align-items:center; transition: 0.3s;">
+            🔇
+        </button>
+    </div>
+    <script>
+        try {{
+            if (!window.top.audioFiesta) {{
+                window.top.audioFiesta = new Audio("data:audio/mp3;base64,{audio_fondo_b64}");
+                window.top.audioFiesta.loop = true;
+            }}
+            
+            var btn = document.getElementById("btn-audio");
+            
+            // Función para estilizar el botón cuando reproduce (casi invisible)
+            function setModoReproduciendo() {{
+                btn.innerHTML = "🔊";
+                btn.style.background = "rgba(20,20,20,0.1)";
+                btn.style.border = "none";
+                btn.style.opacity = "0.5";
+            }}
+
+            if (!window.top.audioFiesta.paused) {{
+                setModoReproduciendo();
+            }}
+
+            window.toggleAudio = function() {{
+                if (window.top.audioFiesta.paused) {{
+                    window.top.audioFiesta.play();
+                    setModoReproduciendo();
+                }} else {{
+                    window.top.audioFiesta.pause();
+                    btn.innerHTML = "🔇";
+                    btn.style.background = "rgba(20,20,20,0.6)";
+                    btn.style.border = "1px solid #d4af37";
+                    btn.style.opacity = "1";
+                }}
+            }}
+
+            // Evento para activar con CUALQUIER clic en la pantalla principal
+            window.top.document.body.addEventListener('click', function() {{
+                if (window.top.audioFiesta.paused) {{
+                    window.top.audioFiesta.play();
+                    setModoReproduciendo();
+                }}
+            }}, {{ once: true }});
+
+        }} catch(e) {{
+            console.log("Error de audio:", e);
+        }}
+    </script>
+    """
+    components.html(html_boton_audio, height=50)
 
 time.sleep(TIEMPO_CAMBIO_FOTOS)
 st.rerun()
