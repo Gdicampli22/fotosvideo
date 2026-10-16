@@ -79,7 +79,6 @@ def obtener_nombres_fotos_supabase():
         nombres = [f["name"] for f in archivos if f["name"].lower().endswith((".png", ".jpg", ".jpeg"))]
         return nombres
     except Exception as e:
-        print(f"Error cargando nombres: {e}")
         return []
 
 @st.cache_data(ttl=600)
@@ -94,7 +93,7 @@ def obtener_foto_base64_desde_nube(nombre_foto):
         return None
 
 # ==========================================
-# LÓGICA DE MENSAJES
+# LÓGICA DE MENSAJES (CORREGIDA ZONA HORARIA)
 # ==========================================
 def obtener_mensajes_marquesina():
     try:
@@ -104,21 +103,33 @@ def obtener_mensajes_marquesina():
         if not todos:
             return "<span class='marquesina-titulo'>✨ ESPERANDO NUEVOS MENSAJES ✨</span>"
 
-        ahora = datetime.now()
+        # Capturamos la hora actual tanto en UTC como en hora local del servidor
+        ahora_utc = datetime.utcnow()
+        ahora_local = datetime.now()
         resultados_recientes = []
         
         for row in todos:
             try:
                 f_str = row["fecha"].replace("T", " ")[:19]
                 f_msj = datetime.strptime(f_str, "%Y-%m-%d %H:%M:%S")
-                if (ahora - f_msj).total_seconds() / 60.0 <= 10:
+                
+                # Comparamos ambas diferencias y nos quedamos con la menor 
+                # (esto soluciona el problema de las zonas horarias entre Streamlit y Supabase)
+                dif_utc = abs((ahora_utc - f_msj).total_seconds() / 60.0)
+                dif_local = abs((ahora_local - f_msj).total_seconds() / 60.0)
+                
+                minutos_pasados = min(dif_utc, dif_local)
+                
+                if minutos_pasados <= 10:
                     resultados_recientes.append((row["nombre"], row["mensaje"]))
             except Exception:
                 pass 
 
         if resultados_recientes:
+            # Damos prioridad estricta a los mensajes nuevos
             resultados_a_mostrar = resultados_recientes
         else:
+            # Si pasaron 10 min en silencio, muestra el historial completo
             resultados_a_mostrar = [(row["nombre"], row["mensaje"]) for row in todos]
 
         textos = []
@@ -318,18 +329,18 @@ else:
     )
 
 # ==========================================
-# BOTÓN DE AUDIO Y CLIC GLOBAL
+# BOTÓN DE AUDIO (ARRIBA A LA DERECHA, AISLADO)
 # ==========================================
 if audio_fondo_b64:
     st.markdown("""
     <style>
-        /* Botón más chiquito y a un costado */
+        /* Forzamos el iframe a la esquina superior derecha */
         iframe[title="streamlit_components.v1.html"] {
             position: fixed !important;
-            bottom: 150px !important; 
-            right: 15px !important;
-            width: 50px !important;
-            height: 50px !important;
+            top: 20px !important; 
+            right: 20px !important;
+            width: 55px !important;
+            height: 55px !important;
             z-index: 99999 !important;
             border: none !important;
             background: transparent !important;
@@ -338,59 +349,49 @@ if audio_fondo_b64:
     """, unsafe_allow_html=True)
     
     html_boton_audio = f"""
-    <div style="display: flex; justify-content: center; align-items: center; height: 100%;">
-        <button id="btn-audio" onclick="toggleAudio()" style="background: rgba(20,20,20,0.6); border: 1px solid #d4af37; border-radius: 50%; width: 40px; height: 40px; font-size: 20px; cursor: pointer; color: white; display:flex; justify-content:center; align-items:center; transition: 0.3s;">
+    <div style="display: flex; justify-content: flex-end; align-items: flex-start; height: 100%; padding: 5px;">
+        <button id="btn-audio" onclick="toggleAudio()" style="background: rgba(10,10,10,0.8); border: 2px solid #d4af37; border-radius: 50%; width: 45px; height: 45px; font-size: 22px; cursor: pointer; color: white; display:flex; justify-content:center; align-items:center; transition: 0.3s;">
             🔇
         </button>
     </div>
     <script>
         try {{
-            if (!window.top.audioFiesta) {{
-                window.top.audioFiesta = new Audio("data:audio/mp3;base64,{audio_fondo_b64}");
-                window.top.audioFiesta.loop = true;
+            // Usamos window.parent para esquivar el bloqueo de Streamlit Cloud
+            let contextoSeguro = window.parent || window;
+            
+            if (!contextoSeguro.audioFiesta) {{
+                contextoSeguro.audioFiesta = new Audio("data:audio/mp3;base64,{audio_fondo_b64}");
+                contextoSeguro.audioFiesta.loop = true;
             }}
             
             var btn = document.getElementById("btn-audio");
             
-            // Función para estilizar el botón cuando reproduce (casi invisible)
-            function setModoReproduciendo() {{
-                btn.innerHTML = "🔊";
-                btn.style.background = "rgba(20,20,20,0.1)";
-                btn.style.border = "none";
-                btn.style.opacity = "0.5";
-            }}
-
-            if (!window.top.audioFiesta.paused) {{
-                setModoReproduciendo();
-            }}
-
-            window.toggleAudio = function() {{
-                if (window.top.audioFiesta.paused) {{
-                    window.top.audioFiesta.play();
-                    setModoReproduciendo();
+            function actualizarBoton() {{
+                if (!contextoSeguro.audioFiesta.paused) {{
+                    btn.innerHTML = "🔊";
+                    btn.style.opacity = "0.3"; 
                 }} else {{
-                    window.top.audioFiesta.pause();
                     btn.innerHTML = "🔇";
-                    btn.style.background = "rgba(20,20,20,0.6)";
-                    btn.style.border = "1px solid #d4af37";
                     btn.style.opacity = "1";
                 }}
             }}
 
-            // Evento para activar con CUALQUIER clic en la pantalla principal
-            window.top.document.body.addEventListener('click', function() {{
-                if (window.top.audioFiesta.paused) {{
-                    window.top.audioFiesta.play();
-                    setModoReproduciendo();
-                }}
-            }}, {{ once: true }});
+            actualizarBoton();
 
+            window.toggleAudio = function() {{
+                if (contextoSeguro.audioFiesta.paused) {{
+                    contextoSeguro.audioFiesta.play();
+                }} else {{
+                    contextoSeguro.audioFiesta.pause();
+                }}
+                actualizarBoton();
+            }}
         }} catch(e) {{
-            console.log("Error de audio:", e);
+            console.log("Error de audio en la nube:", e);
         }}
     </script>
     """
-    components.html(html_boton_audio, height=50)
+    components.html(html_boton_audio, height=60)
 
 time.sleep(TIEMPO_CAMBIO_FOTOS)
 st.rerun()
