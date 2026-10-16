@@ -1,10 +1,11 @@
 import base64
 import os
 import random
-import sqlite3
 import time
-from datetime import datetime, timedelta
+import sqlite3
+from datetime import datetime
 import streamlit as st
+from supabase import create_client, Client
 
 # ==========================================
 # 🎛️ PANEL DE PARAMETRIZACIÓN Y DISEÑO
@@ -15,9 +16,9 @@ ALTURA_MAX_FOTO = "58vh"
 POSICION_MARQUESINA_MENSAJES = "25px" 
 
 ANCHO_BARRAS = "94vw"
-TAMAÑO_FUENTE_MENSAJES = "42px" 
-TAMAÑO_FUENTE_INSTRUCCIONES = "28px" 
-VELOCIDAD_MENSAJES = "35s" 
+TAMAÑO_FUENTE_MENSAJES = "58px"  
+TAMAÑO_FUENTE_INSTRUCCIONES = "32px" 
+VELOCIDAD_MENSAJES = "45s"  # ANTES 35s - Ahora la marquesina va más despacio y suave
 VELOCIDAD_INSTRUCCIONES = "25s" 
 TIEMPO_CAMBIO_FOTOS = 10 
 
@@ -27,9 +28,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-def obtener_imagen_base64(ruta_imagen):
-    with open(ruta_imagen, "rb") as img_file:
-        return base64.b64encode(img_file.read()).decode("utf-8")
+# ==========================================
+# CONEXIÓN A SUPABASE (NEXUS ERP)
+# ==========================================
+url = st.secrets["SUPABASE_URL"]
+key = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(url, key)
 
 def obtener_video_base64(ruta_video):
     with open(ruta_video, "rb") as vid_file:
@@ -47,15 +51,6 @@ def inicializar_base_datos():
         cursor.execute("SELECT COUNT(*) FROM configuracion WHERE id = 1")
         if cursor.fetchone()[0] == 0:
             cursor.execute("INSERT INTO configuracion (id, modo_video_activo) VALUES (1, 0)")
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS mensajes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT,
-                mensaje TEXT,
-                fecha DATETIME
-            )
-        """)
         conexion.commit()
         conexion.close()
     except Exception:
@@ -74,42 +69,58 @@ def obtener_parametro_modo_fiesta():
         return False
 
 # ==========================================
-# LÓGICA INTELIGENTE DE TIEMPOS (10 min y 20 min)
+# LÓGICA DE FOTOS EN LA NUBE (ALTO RENDIMIENTO)
+# ==========================================
+@st.cache_data(ttl=60)
+def obtener_nombres_fotos_supabase():
+    try:
+        archivos = supabase.storage.from_("fotos_fiesta").list()
+        nombres = [f["name"] for f in archivos if f["name"].lower().endswith((".png", ".jpg", ".jpeg"))]
+        return nombres
+    except Exception as e:
+        print(f"Error cargando nombres de Supabase: {e}")
+        return []
+
+@st.cache_data(ttl=600)
+def obtener_foto_base64_desde_nube(nombre_foto):
+    try:
+        file_bytes = supabase.storage.from_("fotos_fiesta").download(nombre_foto)
+        b64_encoded = base64.b64encode(file_bytes).decode("utf-8")
+        extension = nombre_foto.split(".")[-1].lower()
+        tipo_mime = "image/png" if extension == "png" else "image/jpeg"
+        return f"data:{tipo_mime};base64,{b64_encoded}"
+    except Exception as e:
+        print(f"Error convirtiendo foto {nombre_foto}: {e}")
+        return None
+
+# ==========================================
+# LÓGICA INTELIGENTE DE TIEMPOS (Mensajes)
 # ==========================================
 def obtener_mensajes_marquesina():
     try:
-        conexion = sqlite3.connect("fiesta_galeria.db")
-        cursor = conexion.cursor()
-        cursor.execute("SELECT nombre, mensaje, fecha FROM mensajes ORDER BY id ASC")
-        todos = cursor.fetchall()
-        conexion.close()
+        respuesta = supabase.table("mensajes").select("*").order("id").execute()
+        todos = respuesta.data 
         
         if not todos:
             return "<span class='marquesina-titulo'>✨ ESPERANDO NUEVOS MENSAJES ✨</span>"
 
         ahora = datetime.now()
         ultimo_mensaje = todos[-1]
-        fecha_str_ultimo = ultimo_mensaje[2]
-        if "." in fecha_str_ultimo:
-            fecha_ultimo_msj = datetime.strptime(fecha_str_ultimo, "%Y-%m-%d %H:%M:%S.%f")
-        else:
-            fecha_ultimo_msj = datetime.strptime(fecha_str_ultimo, "%Y-%m-%d %H:%M:%S")
+        fecha_str_ultimo = ultimo_mensaje["fecha"].replace("T", " ")[:19]
+        fecha_ultimo_msj = datetime.strptime(fecha_str_ultimo, "%Y-%m-%d %H:%M:%S")
 
         minutos_inactividad = (ahora - fecha_ultimo_msj).total_seconds() / 60.0
         resultados_a_mostrar = []
         
         if minutos_inactividad > 20:
-            resultados_a_mostrar = [(row[0], row[1]) for row in todos]
+            resultados_a_mostrar = [(row["nombre"], row["mensaje"]) for row in todos]
         else:
-            for nombre, msj, f_str in todos:
+            for row in todos:
                 try:
-                    if "." in f_str:
-                        f_msj = datetime.strptime(f_str, "%Y-%m-%d %H:%M:%S.%f")
-                    else:
-                        f_msj = datetime.strptime(f_str, "%Y-%m-%d %H:%M:%S")
-                    
+                    f_str = row["fecha"].replace("T", " ")[:19]
+                    f_msj = datetime.strptime(f_str, "%Y-%m-%d %H:%M:%S")
                     if (ahora - f_msj).total_seconds() / 60.0 <= 10:
-                        resultados_a_mostrar.append((nombre, msj))
+                        resultados_a_mostrar.append((row["nombre"], row["mensaje"]))
                 except Exception:
                     pass 
 
@@ -127,7 +138,6 @@ def obtener_mensajes_marquesina():
         
     except Exception as e:
         return f"<span class='marquesina-titulo'>⚠️ ERROR LEYENDO BD:</span> {e}"
-
 
 activar_video_fiesta = obtener_parametro_modo_fiesta()
 texto_dinamico_mensajes = obtener_mensajes_marquesina()
@@ -151,7 +161,6 @@ if os.path.exists(audio_path):
     except Exception:
         pass
 
-# Generamos la etiqueta de audio solo si el archivo existe
 html_audio = ""
 if audio_fondo_b64:
     html_audio = f"""
@@ -169,31 +178,26 @@ st.markdown(
         footer {{visibility: hidden;}}
         header {{visibility: hidden;}}
         
-        .block-container {{
-            padding-top: 0.1rem; padding-bottom: 0rem;
-            padding-left: 0.5rem; padding-right: 0.5rem;
-            max-width: 100%;
+        [data-testid="stAppViewContainer"], 
+        [data-testid="stAppViewBlockContainer"], 
+        .stApp {{
+            opacity: 1 !important;
+            transition: none !important;
         }}
-
+        
+        [data-testid="stStatusWidget"] {{
+            visibility: hidden !important;
+            display: none !important;
+        }}
+        
+        .block-container {{ padding-top: 0.1rem; padding-bottom: 0rem; padding-left: 0.5rem; padding-right: 0.5rem; max-width: 100%; }}
         .stApp {{ background: transparent !important; }}
 
-        .video-fondo-html {{
-            position: fixed; top: 0; left: 0;
-            width: 100vw; height: 100vh;
-            object-fit: cover; z-index: -999;
-        }}
+        .video-fondo-html {{ position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: cover; z-index: -999; }}
+        .overlay-oscuro {{ position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.45); z-index: -998; }}
 
-        .overlay-oscuro {{
-            position: fixed; top: 0; left: 0;
-            width: 100vw; height: 100vh;
-            background: rgba(0, 0, 0, 0.45); z-index: -998;
-        }}
-
-        .contenedor-foto-central {{
-            display: flex; justify-content: center; align-items: center;
-            width: 100%; height: 58vh; margin: 0 auto; overflow: hidden;
-        }}
-
+        .contenedor-foto-central {{ display: flex; justify-content: center; align-items: center; width: 100%; height: 58vh; margin: 0 auto; overflow: hidden; }}
+        
         .foto-proyector {{
             max-width: {ANCHO_MAX_FOTO} !important; max-height: {ALTURA_MAX_FOTO} !important;
             width: auto !important; height: auto !important;
@@ -206,6 +210,7 @@ st.markdown(
         @keyframes efectoZoomIn {{ 0% {{ opacity: 0; transform: scale(1.05); }} 100% {{ opacity: 1; transform: scale(1); }} }}
         @keyframes efectoSlideLeft {{ 0% {{ opacity: 0; transform: translateX(40px); }} 100% {{ opacity: 1; transform: translateX(0); }} }}
         @keyframes efectoRotateIn {{ 0% {{ opacity: 0; transform: rotate(-2deg) scale(0.98); }} 100% {{ opacity: 1; transform: rotate(0deg) scale(1); }} }}
+        
         .transicion-fade {{ animation: efectoFade 1.2s ease-in-out; }}
         .transicion-zoom {{ animation: efectoZoomIn 1.2s ease-in-out; }}
         .transicion-slide {{ animation: efectoSlideLeft 1s ease-in-out; }}
@@ -213,9 +218,9 @@ st.markdown(
 
         .marquesina-contenedor {{
             position: fixed; bottom: {POSICION_MARQUESINA_MENSAJES}; left: 50%; transform: translateX(-50%);
-            width: {ANCHO_BARRAS};
-            background: linear-gradient(135deg, rgba(17,17,17,0.95) 0%, rgba(34,34,34,0.95) 100%);
-            border: 3px solid #d4af37; border-radius: 16px; padding: 15px 20px;
+            width: {ANCHO_BARRAS}; background: linear-gradient(135deg, rgba(17,17,17,0.95) 0%, rgba(34,34,34,0.95) 100%);
+            border: 3px solid #d4af37; border-radius: 16px; 
+            padding: 20px 25px; 
             box-shadow: 0px 10px 30px rgba(0,0,0, 0.8); z-index: 99; overflow: hidden; white-space: nowrap;
         }}
 
@@ -230,27 +235,24 @@ st.markdown(
         .marquesina-titulo {{ color: #d4af37; font-weight: bold; }}
 
         .instrucciones-contenedor {{
-            width: {ANCHO_BARRAS};
-            margin: 0 auto 10px auto; 
-            background: rgba(10, 10, 10, 0.75);
-            border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 10px; padding: 4px 20px;
-            box-shadow: 0px 4px 15px rgba(0,0,0, 0.8); z-index: 100; overflow: hidden; white-space: nowrap;
+            width: {ANCHO_BARRAS}; margin: 0 auto 10px auto; 
+            background: rgba(10, 10, 10, 0.75); border: 1px solid rgba(255, 255, 255, 0.2); 
+            border-radius: 10px; padding: 4px 20px; box-shadow: 0px 4px 15px rgba(0,0,0, 0.8); 
+            z-index: 100; overflow: hidden; white-space: nowrap;
         }}
 
         .instrucciones-animada {{
             display: inline-block; padding-left: 100%;
             animation: deslizarInstrucciones {VELOCIDAD_INSTRUCCIONES} linear infinite;
             color: #dddddd; font-size: {TAMAÑO_FUENTE_INSTRUCCIONES};
-            font-family: 'Dancing Script', cursive, sans-serif; 
-            font-weight: 700; letter-spacing: 1px;
+            font-family: 'Dancing Script', cursive, sans-serif; font-weight: 700; letter-spacing: 1px;
         }}
 
         @keyframes deslizarInstrucciones {{ 0% {{ transform: translate(0, 0); }} 100% {{ transform: translate(-100%, 0); }} }}
         
         .instrucciones-destaque {{
-            color: #d4af37; font-weight: bold; 
-            font-family: 'Helvetica Neue', sans-serif;
-            font-style: normal; letter-spacing: 1px; font-size: 22px;
+            color: #d4af37; font-weight: bold; font-family: 'Helvetica Neue', sans-serif;
+            font-style: normal; letter-spacing: 1px; font-size: 26px; 
         }}
 
     </style>
@@ -264,10 +266,15 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ==========================================
+# RENDERIZADO PRINCIPAL
+# ==========================================
 
 if activar_video_fiesta:
     if os.path.exists(video_path):
         st.video(video_path, format="video/mp4", autoplay=True, loop=True, muted=True)
+    else:
+        st.error(f"No se encontró el archivo de video '{video_path}'.")
 else:
     st.markdown(
         f"""
@@ -283,42 +290,47 @@ else:
         unsafe_allow_html=True,
     )
 
-    lista_fotos = [archivo for archivo in os.listdir(".") if archivo.lower().endswith((".png", ".jpg", ".jpeg"))]
-    if os.path.exists("uploaded_media"):
-        lista_fotos += [os.path.join("uploaded_media", a) for a in os.listdir("uploaded_media") if a.lower().endswith((".png", ".jpg", ".jpeg"))]
+    lista_nombres_fotos = obtener_nombres_fotos_supabase()
 
-    if lista_fotos:
+    if lista_nombres_fotos:
         if "indice_foto" not in st.session_state:
             st.session_state.indice_foto = 0
 
-        foto_actual = lista_fotos[st.session_state.indice_foto % len(lista_fotos)]
+        nombre_actual = lista_nombres_fotos[st.session_state.indice_foto % len(lista_nombres_fotos)]
+        nombre_siguiente = lista_nombres_fotos[(st.session_state.indice_foto + 1) % len(lista_nombres_fotos)]
+        
+        foto_actual_b64 = obtener_foto_base64_desde_nube(nombre_actual)
+        foto_siguiente_b64 = obtener_foto_base64_desde_nube(nombre_siguiente)
+        
         efectos_disponibles = ["transicion-fade", "transicion-zoom", "transicion-slide", "transicion-rotate"]
-
         if "efecto_actual" not in st.session_state:
             st.session_state.efecto_actual = random.choice(efectos_disponibles)
 
-        try:
-            imagen_b64 = obtener_imagen_base64(foto_actual)
-            extension = foto_actual.split(".")[-1].lower()
-            tipo_mime = "image/png" if extension == "png" else "image/jpeg"
-
+        if foto_actual_b64:
             st.markdown(
                 f"""
+                <!-- PRECARGA INVISIBLE DE LA SIGUIENTE FOTO -->
+                <img src="{foto_siguiente_b64}" style="display:none;" />
+                
                 <div class="{st.session_state.efecto_actual}">
                     <div class="contenedor-foto-central">
-                        <img src="data:{tipo_mime};base64,{imagen_b64}" class="foto-proyector" />
+                        <img src="{foto_actual_b64}" class="foto-proyector" />
                     </div>
                 </div>
-            """,
+                """,
                 unsafe_allow_html=True,
             )
-        except Exception:
-            pass
 
         st.session_state.indice_foto += 1
         st.session_state.efecto_actual = random.choice(efectos_disponibles)
     else:
-        st.error("⚠️ No se encontraron imágenes en el directorio para la galería.")
+        st.markdown("""
+            <div style="display:flex; justify-content:center; align-items:center; height:58vh;">
+                <h2 style="color:white; background:rgba(0,0,0,0.7); padding:20px; border-radius:10px;">
+                    📸 Subiendo fotos al álbum...
+                </h2>
+            </div>
+        """, unsafe_allow_html=True)
 
     st.markdown(
         f"""

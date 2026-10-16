@@ -1,44 +1,44 @@
-import sqlite3
-import datetime
 import base64
 import os
+from datetime import datetime
 import streamlit as st
+from supabase import create_client, Client
 
 # ==========================================
-# CONFIGURACIÓN PARA CELULARES
+# CONFIGURACIÓN DE PÁGINA (Para Celulares)
 # ==========================================
-st.set_page_config(page_title="Saludos para Hilda", page_icon="🥂", layout="centered")
+st.set_page_config(
+    page_title="Saludos para Hilda", 
+    page_icon="🥂", 
+    layout="centered"
+)
+
+# ==========================================
+# CONEXIÓN A SUPABASE (NEXUS ERP)
+# ==========================================
+# Se conecta usando el mismo secrets.toml de la carpeta .streamlit
+url = st.secrets["SUPABASE_URL"]
+key = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(url, key)
+
+def guardar_mensaje(nombre, mensaje):
+    try:
+        # Preparamos los datos a enviar
+        datos = {
+            "nombre": nombre,
+            "mensaje": mensaje,
+            "fecha": datetime.now().isoformat()
+        }
+        # Insertamos en la tabla 'mensajes' de la nube
+        supabase.table("mensajes").insert(datos).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error al enviar el mensaje: {e}")
+        return False
 
 def obtener_video_base64(ruta_video):
     with open(ruta_video, "rb") as vid_file:
         return base64.b64encode(vid_file.read()).decode("utf-8")
-
-# ==========================================
-# BASE DE DATOS DE MENSAJES (SEGURO - ACUMULATIVO)
-# ==========================================
-def inicializar_bd_mensajes():
-    conexion = sqlite3.connect("fiesta_galeria.db")
-    cursor = conexion.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS mensajes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT,
-            mensaje TEXT,
-            fecha DATETIME
-        )
-    """)
-    conexion.commit()
-    conexion.close()
-
-def guardar_mensaje(nombre, mensaje):
-    conexion = sqlite3.connect("fiesta_galeria.db")
-    cursor = conexion.cursor()
-    cursor.execute("INSERT INTO mensajes (nombre, mensaje, fecha) VALUES (?, ?, ?)", 
-                   (nombre, mensaje, datetime.datetime.now()))
-    conexion.commit()
-    conexion.close()
-
-inicializar_bd_mensajes()
 
 # ==========================================
 # INYECCIÓN DE ESTILOS CSS Y FONDO ANIMADO
@@ -58,24 +58,22 @@ st.markdown(
         footer {{visibility: hidden;}}
         header {{visibility: hidden;}}
         
-        /* Fondo transparente para ver el video */
         .stApp {{ background: transparent !important; }}
 
-        /* Video de fondo a pantalla completa */
+        /* Fondo animado adaptado a pantallas verticales (celulares) */
         .video-fondo-html {{
             position: fixed; top: 0; left: 0;
             width: 100vw; height: 100vh;
             object-fit: cover; z-index: -999;
         }}
 
-        /* Capa oscura para que el formulario se lea perfecto y resalte */
         .overlay-oscuro {{
             position: fixed; top: 0; left: 0;
             width: 100vw; height: 100vh;
             background: rgba(0, 0, 0, 0.65); z-index: -998;
         }}
 
-        /* Estilo del formulario flotante (Efecto cristal oscuro) */
+        /* Estilos del formulario de mensajes */
         [data-testid="stForm"] {{
             background: rgba(20, 20, 20, 0.85) !important;
             border: 2px solid rgba(212, 175, 55, 0.6) !important;
@@ -85,14 +83,8 @@ st.markdown(
             margin-top: 20px;
         }}
 
-        /* Textos dentro de la app */
-        p, label {{
-            color: #ffffff !important;
-            font-weight: 600 !important;
-            font-size: 16px !important;
-        }}
+        p, label {{ color: #ffffff !important; font-weight: 600 !important; font-size: 16px !important; }}
 
-        /* Botón de envío doradito */
         button[kind="formSubmit"], 
         div[data-testid="stFormSubmitButton"] > button,
         .stButton > button {{ 
@@ -106,8 +98,7 @@ st.markdown(
             padding: 12px !important; 
             margin-top: 15px !important;
             box-shadow: 0px 4px 15px rgba(212, 175, 55, 0.4) !important;
-            opacity: 1 !important;
-            visibility: visible !important;
+            opacity: 1 !important; visibility: visible !important;
         }}
         
         button[kind="formSubmit"]:hover, 
@@ -130,51 +121,34 @@ st.markdown(
 # INTERFAZ DEL INVITADO
 # ==========================================
 st.markdown("<h1 style='text-align: center; color: #d4af37; font-family: serif; text-shadow: 2px 2px 4px #000;'>✨ 70 Años de Hilda ✨</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center;'>¡Dejale tu mensaje a Hilda para que aparezca en la pantalla gigante del salón!</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; text-shadow: 1px 1px 3px #000;'>¡Dejale tu mensaje a Hilda para que aparezca en la pantalla gigante del salón!</p>", unsafe_allow_html=True)
 
+# Formulario de carga
 with st.form("formulario_saludos", clear_on_submit=True):
     nombre_invitado = st.text_input("Tu Nombre (Ej: Flia. Pérez, Juan, etc.)", max_chars=30)
-    
-    # Indicador de que pueden usar el teclado del celular
     mensaje_invitado = st.text_area("Tu Mensaje (Podés usar los emojis de tu teclado 🥳)", max_chars=120, placeholder="Escribe un lindo saludo...")
     
-    # Selector rápido con MÁS EMOJIS FESTIVOS
+    # Emojis rápidos por si a la gente grande le cuesta buscar en el teclado
     lista_emojis = [
-        "Ninguno", 
-        "🥂 (Brindis)", 
-        "🎂 (Torta grande)", 
-        "🍰 (Porción de torta)",
-        "🎉 (Fiesta)", 
-        "🥳 (Carita festejando)",
-        "🍾 (Champagne)",
-        "❤️ (Corazón rojo)", 
-        "💖 (Corazón brillante)",
-        "🥰 (Carita enamorada)",
-        "🎈 (Globos)", 
-        "🎁 (Regalo)",
-        "💐 (Ramo de flores)",
-        "💃 (A bailar!)",
-        "🎶 (Música)",
-        "🌟 (Estrella)"
+        "Ninguno", "🥂 (Brindis)", "🎂 (Torta grande)", "🍰 (Porción de torta)",
+        "🎉 (Fiesta)", "🥳 (Carita festejando)", "🍾 (Champagne)", "❤️ (Corazón rojo)", 
+        "💖 (Corazón brillante)", "🥰 (Carita enamorada)", "🎈 (Globos)", 
+        "🎁 (Regalo)", "💐 (Ramo de flores)", "💃 (A bailar!)", "🎶 (Música)", "🌟 (Estrella)"
     ]
     
     emoji_extra = st.selectbox("O sumale un emoji rápido:", lista_emojis)
-    
     enviado = st.form_submit_button("Enviar Saludo a la Pantalla 🥂")
 
     if enviado:
         if nombre_invitado.strip() and mensaje_invitado.strip():
-            
-            # Si eligió un emoji del selector, se lo sumamos al final del mensaje
             mensaje_final = mensaje_invitado.strip()
+            # Si eligió un emoji del selector, se lo pegamos al final del mensaje
             if emoji_extra != "Ninguno":
-                solo_emoji = emoji_extra.split(" ")[0] # Extrae solo el icono (ej: "🥂")
+                solo_emoji = emoji_extra.split(" ")[0] 
                 mensaje_final = f"{mensaje_final} {solo_emoji}"
 
-            # Guardamos en la base de datos
-            guardar_mensaje(nombre_invitado.strip(), mensaje_final)
-            
-            st.success("¡Tu mensaje fue enviado con éxito! 🎈 Mirá la pantalla.")
-            st.balloons()
+            if guardar_mensaje(nombre_invitado.strip(), mensaje_final):
+                st.success("¡Tu mensaje fue enviado con éxito a la nube! 🎈 Mirá la pantalla.")
+                st.balloons()
         else:
             st.error("⚠️ Por favor, completá tu nombre y el mensaje.")
